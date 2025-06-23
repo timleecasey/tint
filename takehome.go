@@ -1,0 +1,350 @@
+package main
+
+import (
+	"cmp"
+	"container/heap"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+)
+
+/*
+You can use any language.
+
+Implement a cache which includes the following features:
+  Expire Time - after which an entry in the cache is invalid
+  Priority - lower priority entries should be evicted before higher priority entries
+  LRU - within a given priority, the least recently used item should be evicted first
+
+The cache should support these operations:
+  Get: Get the value of the key if the key exists in the cache and is not expired.
+  Set: Update or insert the value of the key with a priority value and expire time.
+       This should never ever allow more items than maxItems to be in the cache.
+
+The cache eviction strategy should be as follows:
+  1. Evict an expired entry first.
+  2. If there are no expired items to evict, evict the lowest priority entry.
+  3. If there are multiple items with the same priority, evict the least
+     recently used among them.
+
+This data structure is expected to hold large datasets (>>10^6 items) and should be
+as efficient as possible.
+*/
+
+type Priority uint8
+type Value int
+
+const (
+	NO_KEY            = Value(-1)
+	INITIAL_PRIORITY  = Priority(101)
+	GREATEST_PRIORITY = Priority(100)
+	LEAST_PRIORITY    = Priority(0)
+)
+
+type entry struct {
+	expireTime int64
+	op         uint64
+	key        string
+	priority   Priority
+	value      Value
+}
+
+func LowToHighExpire(a, b *entry) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return 1
+	}
+	if b == nil {
+		return -1
+	}
+	return cmp.Compare(a.expireTime, b.expireTime)
+}
+
+func HiToLowPriority(a, b *entry) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return 1
+	}
+	if b == nil {
+		return -1
+	}
+	return cmp.Compare(b.priority, a.priority)
+}
+
+func (e *entry) String() string {
+	return fmt.Sprintf("%v:%v", e.key, e.op)
+}
+
+type PriorityExpiryCache struct {
+	maxItems  int // maxItems is the maximum entries allowed in the cache
+	itemCount int // itemCount is the number of current entries in the cache
+	lock      sync.Mutex
+	curOp     uint64 // curOp will identify the order of entries and usage.
+	//expires    []*entry            // expires is a list of items sorted by earliest at the head
+	expiryPq   heap.Interface
+	priorities map[string][]*entry // priorities is a map of entires which are kept by priority
+	timer      TimeProvider
+}
+
+func NewCache(capacity int, timer TimeProvider) *PriorityExpiryCache {
+	var h heap.Interface
+	h = MakeExpirePQ(capacity)
+	heap.Init(h)
+	return &PriorityExpiryCache{
+		maxItems: capacity,
+		lock:     sync.Mutex{},
+		curOp:    0,
+		//expires:    make([]*entry, 0),
+		expiryPq:   h,
+		priorities: make(map[string][]*entry, 0),
+		timer:      timer,
+	}
+}
+
+func (c *PriorityExpiryCache) Keys() []string {
+	keys := make([]string, len(c.priorities))
+
+	// edit
+	index := 0
+	for k, _ := range c.priorities {
+		keys[index] = k
+		index++
+	}
+
+	slices.Sort(keys)
+	return keys
+}
+
+// Expected to be O(1)
+func (c *PriorityExpiryCache) Get(key string) (int, bool) {
+	key = strings.Trim(key, " \n\r\t")
+	ofkey, ok := c.priorities[key]
+	if !ok {
+		return int(NO_KEY), false
+	}
+	now := c.timer.NowInMillis()
+	if ofkey[0].expireTime < now {
+		c.evictExpired(now)
+		ofkey, ok = c.priorities[key]
+		if !ok {
+			return int(NO_KEY), false
+		}
+	}
+	c.curOp++
+	ofkey[0].op = c.curOp
+	return int(ofkey[0].value), true
+}
+
+// Expected to be log(p) + log(e)
+func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInSec int) {
+	now := c.timer.NowInMillis()
+	expireMs := int64(expireInSec*1000) + now
+	c.curOp++
+	i := &entry{
+		expireTime: expireMs,
+		priority:   Priority(priority),
+		value:      Value(value),
+		op:         c.curOp,
+		key:        strings.Trim(key, " \n\r\t"),
+	}
+
+	if c.itemCount >= c.maxItems {
+		c.evictItems()
+	}
+
+	//
+	// Not quite right yet.  If you are replacing an item
+	// then you are not increasing the item count.
+	//
+	c.itemCount++
+	c.expiryPq.Push(i) // have to push from a heap
+	//c.expires = append(c.expires, i)
+	//slices.SortFunc(c.expires, LowToHighExpire)
+
+	ofKey, ok := c.priorities[key]
+	if !ok {
+		ofKey = make([]*entry, 1)
+		ofKey[0] = i
+		c.priorities[key] = ofKey
+
+	} else {
+		c.priorities[key] = append(ofKey, i)
+		slices.SortFunc(c.priorities[key], HiToLowPriority)
+	}
+}
+
+func (c *PriorityExpiryCache) SetMaxItems(maxItems int) {
+	c.maxItems = maxItems
+	if c.maxItems < c.itemCount {
+		c.evictItems()
+	}
+}
+
+// evictItems
+// may evict items from the cache to make room for new ones. This is done
+// in a tiered way.  First, if there are expired items, they are removed.
+// If there are two priorities which shadow each other, the lower priority
+// is removed.  It is import to note a lower priority item may stay in the
+// cache if at least one higher priority item exists which will expire
+// before the lower priority one.  If there is a tie for expire and priority
+// then op is used to pick the most recent item to keep.
+func (c *PriorityExpiryCache) evictItems() {
+
+	c.evictExpired(c.timer.NowInMillis())
+
+	if c.itemCount <= c.maxItems {
+		return
+	}
+
+	cnt := c.itemCount - c.maxItems
+	for i := 0; i < cnt; i++ {
+		c.evictPriorities(c.itemCount - c.maxItems)
+	}
+}
+
+func (c *PriorityExpiryCache) evictPriorities(numToDelete int) {
+
+	var cur *entry
+	cur = nil
+	lowestPri := INITIAL_PRIORITY
+	lowestOp := c.curOp
+
+	for _, v := range c.priorities {
+
+		if len(v) > 0 {
+			//
+			// Select the lowest priority entry from a given key
+			//
+			e := v[len(v)-1]
+			if e.priority < lowestPri {
+				cur = e
+				lowestPri = e.priority
+				lowestOp = e.op
+			} else if e.priority == lowestPri && e.op < lowestOp {
+				cur = e
+				lowestOp = e.op
+			}
+		}
+	}
+
+	//fmt.Printf("PRI %v for cnt %v and max %v\n", cur, c.itemCount, c.maxItems)
+
+	if cur != nil {
+		c.deleteItemFromMap(cur)
+	}
+}
+
+func (c *PriorityExpiryCache) evictExpired(now int64) {
+
+	var pq *ExpirePQ
+	pq = c.expiryPq.(*ExpirePQ)
+	e := pq.Peek()
+	for e != nil && e.expireTime <= now {
+		fmt.Printf("EXP %v:%v\n", e.key, e.op)
+		c.expiryPq.Pop()
+		c.deleteItemFromMap(e)
+		e = pq.Peek()
+	}
+
+	//mark := -1
+	//expireLen := len(c.expires)
+	////diff := c.expires[0].expireTime - now
+	////fmt.Printf("DIFF %v\n", diff)
+	//for i := 0; i < expireLen && c.expires[i].expireTime <= now; i++ {
+	//	//diff = c.expires[i].expireTime - now
+	//	//fmt.Printf("  DIFF %v @ %v %v\n", i, diff, c.expires[i].key)
+	//	mark = i
+	//}
+	//
+	//for i := 0; i <= mark; i++ {
+	//	e := c.expires[i]
+	//	//fmt.Printf("EXP %v:%v\n", e.key, e.op)
+	//	c.deleteItemFromMap(e)
+	//}
+	//
+	////fmt.Printf("Mark %v\n", mark)
+	//if mark > -1 {
+	//	c.expires = c.expires[mark+1:]
+	//}
+}
+
+func (c *PriorityExpiryCache) deleteItemFromMap(toRm *entry) {
+
+	//fmt.Printf("DEL %v\n", toRm)
+	if entryList, ok := c.priorities[toRm.key]; ok {
+		for i := range entryList {
+			e := entryList[i]
+			if e.priority == toRm.priority && e.expireTime == toRm.expireTime {
+				c.itemCount--
+				if len(entryList) == 1 {
+					delete(c.priorities, toRm.key)
+				} else {
+					c.priorities[toRm.key] = append(entryList[0:i], entryList[i+1:]...)
+				}
+				break
+			}
+		}
+	}
+}
+
+func sleep(secs int) {
+	st := time.Now().UnixMilli()
+	en := st + int64(secs*1000)
+	for time.Now().UnixMilli() < en {
+		time.Sleep(1)
+	}
+}
+
+func main() {
+	//Example:
+	c := NewCache(5, &WallTime{})
+	// c.Set([key name], value, priority, expiryTime)
+	c.Set("A", 1, 5, 100)
+	c.Set("B", 2, 15, 1)
+	c.Set("C", 3, 5, 10)
+	c.Set("D", 4, 1, 15)
+	c.Set("E", 5, 5, 150)
+	c.Get("C")
+
+	// Current time = 0
+	c.SetMaxItems(5)
+	fmt.Printf("KEYS %v\n", c.Keys())
+	// space for 5 keys, all 5 items are included
+
+	//fmt.Printf("TM %v \n", time.Now().UnixMilli())
+	sleep(2)
+	//fmt.Printf("TM %v \n", time.Now().UnixMilli())
+
+	// Current time = 2
+	c.SetMaxItems(4)
+	//c.Keys() = ["A", "C", "D", "E"]
+	fmt.Printf("KEYS %v -- A, C, D, E\n", c.Keys())
+
+	// "B" is removed because it is expired.  expiry 3 < 5
+
+	c.SetMaxItems(3)
+	//c.Keys() = ["A", "C", "E"]
+	fmt.Printf("KEYS %v -- A, C, E\n", c.Keys())
+
+	// "D" is removed because it the lowest priority
+	// D's expire time is irrelevant.
+
+	c.SetMaxItems(2)
+	//c.Keys() = ["C", "E"]
+	fmt.Printf("KEYS %v -- C, E\n", c.Keys())
+
+	// "A" is removed because it is least recently used."
+	// A's expire time is irrelevant.
+
+	c.SetMaxItems(1)
+	//c.Keys() = ["C"]
+	fmt.Printf("KEYS %v -- C\n", c.Keys())
+
+	// "E" is removed because C is more recently used (due to the Get("C") event).
+}
