@@ -122,7 +122,12 @@ func (c *PriorityExpiryCache) Get(key string) (int, bool) {
 	if !ok {
 		return int(NO_KEY), false
 	}
+
 	now := c.timer.NowInMillis()
+
+	//
+	// If expired, expire items and refetch
+	//
 	if ofkey[0].expireTime < now {
 		c.evictExpired(now)
 		ofkey, ok = c.priorities[key]
@@ -130,8 +135,13 @@ func (c *PriorityExpiryCache) Get(key string) (int, bool) {
 			return int(NO_KEY), false
 		}
 	}
+
+	//
+	// Update LRU
+	//
 	c.curOp++
 	ofkey[0].op = c.curOp
+
 	return int(ofkey[0].value), true
 }
 
@@ -164,8 +174,10 @@ func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInS
 		ofKey = make([]*entry, 1)
 		ofKey[0] = i
 		c.priorities[key] = ofKey
-
 	} else {
+		//
+		// This seems overkill, or a waste of churn.
+		//
 		c.priorities[key] = append(ofKey, i)
 		slices.SortFunc(c.priorities[key], HiToLowPriority)
 	}
@@ -200,6 +212,12 @@ func (c *PriorityExpiryCache) evictItems() {
 	}
 }
 
+//
+// evictPriorities
+// Go through the items by priority and find a item to evict.
+// Since we add/remove items one by one, this primarily operates
+// by finding a low priority item and removing it.
+//
 func (c *PriorityExpiryCache) evictPriorities() {
 
 	var cur *entry
@@ -233,6 +251,9 @@ func (c *PriorityExpiryCache) evictPriorities() {
 	}
 }
 
+// evictExpired
+// Go through and remove items which are past now
+//
 func (c *PriorityExpiryCache) evictExpired(now int64) {
 
 	var pq *ExpirePQ
@@ -246,6 +267,12 @@ func (c *PriorityExpiryCache) evictExpired(now int64) {
 
 }
 
+// deleteItemFromMap
+// Given an expired item, remove it from the map.
+// You may not find the item since it was removed by priority.
+// An item is equal if it has the same key/priority/expire.
+// Since there are different priorities and LRU considerations,
+// these are taken over item value.
 func (c *PriorityExpiryCache) deleteItemFromMap(toRm *entry) {
 
 	//fmt.Printf("DEL %v\n", toRm)
@@ -267,6 +294,7 @@ func (c *PriorityExpiryCache) deleteItemFromMap(toRm *entry) {
 	}
 }
 
+// whiskey tango foxtrot
 func sleep(secs int) {
 	st := time.Now().UnixMilli()
 	en := st + int64(secs*1000)
