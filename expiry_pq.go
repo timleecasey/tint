@@ -17,7 +17,7 @@ func (pq *ExpirePQ) Len() int {
 }
 
 func (pq *ExpirePQ) Swap(i, j int) {
-	pq.entries[i], pq.entries[j] = pq.entries[j], pq.entries[j]
+	pq.entries[i], pq.entries[j] = pq.entries[j], pq.entries[i]
 }
 
 func (pq *ExpirePQ) Push(a any) {
@@ -36,11 +36,8 @@ func (pq *ExpirePQ) Pop() any {
 }
 
 func (pq *ExpirePQ) Less(i, j int) bool {
-	return pq.entries[i].expireTime < pq.entries[j].expireTime
-}
-
-func (pq *ExpirePQ) More(i, j int) bool {
-	return pq.entries[i].expireTime > pq.entries[j].expireTime
+	less := pq.entries[j].expireTime < pq.entries[i].expireTime
+	return less
 }
 
 func (pq *ExpirePQ) Peek() *entry {

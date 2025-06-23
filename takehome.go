@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -78,16 +77,14 @@ func HiToLowPriority(a, b *entry) int {
 }
 
 func (e *entry) String() string {
-	return fmt.Sprintf("%v:%v", e.key, e.op)
+	return fmt.Sprintf("%v:%v @ %v", e.key, e.op, e.expireTime/1000)
 }
 
 type PriorityExpiryCache struct {
-	maxItems  int // maxItems is the maximum entries allowed in the cache
-	itemCount int // itemCount is the number of current entries in the cache
-	lock      sync.Mutex
-	curOp     uint64 // curOp will identify the order of entries and usage.
-	//expires    []*entry            // expires is a list of items sorted by earliest at the head
-	expiryPq   heap.Interface
+	maxItems   int                 // maxItems is the maximum entries allowed in the cache
+	itemCount  int                 // itemCount is the number of current entries in the cache
+	curOp      uint64              // curOp will identify the order of entries and usage.
+	expiryPq   heap.Interface      // expiryPq is a heap interface keeping the next expiry backed by an array
 	priorities map[string][]*entry // priorities is a map of entires which are kept by priority
 	timer      TimeProvider
 }
@@ -97,10 +94,8 @@ func NewCache(capacity int, timer TimeProvider) *PriorityExpiryCache {
 	h = MakeExpirePQ(capacity)
 	heap.Init(h)
 	return &PriorityExpiryCache{
-		maxItems: capacity,
-		lock:     sync.Mutex{},
-		curOp:    0,
-		//expires:    make([]*entry, 0),
+		maxItems:   capacity,
+		curOp:      0,
 		expiryPq:   h,
 		priorities: make(map[string][]*entry, 0),
 		timer:      timer,
@@ -110,7 +105,6 @@ func NewCache(capacity int, timer TimeProvider) *PriorityExpiryCache {
 func (c *PriorityExpiryCache) Keys() []string {
 	keys := make([]string, len(c.priorities))
 
-	// edit
 	index := 0
 	for k, _ := range c.priorities {
 		keys[index] = k
@@ -159,13 +153,11 @@ func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInS
 	}
 
 	//
-	// Not quite right yet.  If you are replacing an item
-	// then you are not increasing the item count.
+	// Allow for duplication in the cache.  When there
+	// is an eviction notice this should resolve then.
 	//
 	c.itemCount++
-	c.expiryPq.Push(i) // have to push from a heap
-	//c.expires = append(c.expires, i)
-	//slices.SortFunc(c.expires, LowToHighExpire)
+	heap.Push(c.expiryPq, i) // have to push from a heap
 
 	ofKey, ok := c.priorities[key]
 	if !ok {
@@ -204,11 +196,11 @@ func (c *PriorityExpiryCache) evictItems() {
 
 	cnt := c.itemCount - c.maxItems
 	for i := 0; i < cnt; i++ {
-		c.evictPriorities(c.itemCount - c.maxItems)
+		c.evictPriorities()
 	}
 }
 
-func (c *PriorityExpiryCache) evictPriorities(numToDelete int) {
+func (c *PriorityExpiryCache) evictPriorities() {
 
 	var cur *entry
 	cur = nil
@@ -226,14 +218,15 @@ func (c *PriorityExpiryCache) evictPriorities(numToDelete int) {
 				cur = e
 				lowestPri = e.priority
 				lowestOp = e.op
+				//
+				// Take the LRU if the priorities are the same.
+				//
 			} else if e.priority == lowestPri && e.op < lowestOp {
 				cur = e
 				lowestOp = e.op
 			}
 		}
 	}
-
-	//fmt.Printf("PRI %v for cnt %v and max %v\n", cur, c.itemCount, c.maxItems)
 
 	if cur != nil {
 		c.deleteItemFromMap(cur)
@@ -246,32 +239,11 @@ func (c *PriorityExpiryCache) evictExpired(now int64) {
 	pq = c.expiryPq.(*ExpirePQ)
 	e := pq.Peek()
 	for e != nil && e.expireTime <= now {
-		fmt.Printf("EXP %v:%v\n", e.key, e.op)
-		c.expiryPq.Pop()
+		heap.Pop(c.expiryPq)
 		c.deleteItemFromMap(e)
 		e = pq.Peek()
 	}
 
-	//mark := -1
-	//expireLen := len(c.expires)
-	////diff := c.expires[0].expireTime - now
-	////fmt.Printf("DIFF %v\n", diff)
-	//for i := 0; i < expireLen && c.expires[i].expireTime <= now; i++ {
-	//	//diff = c.expires[i].expireTime - now
-	//	//fmt.Printf("  DIFF %v @ %v %v\n", i, diff, c.expires[i].key)
-	//	mark = i
-	//}
-	//
-	//for i := 0; i <= mark; i++ {
-	//	e := c.expires[i]
-	//	//fmt.Printf("EXP %v:%v\n", e.key, e.op)
-	//	c.deleteItemFromMap(e)
-	//}
-	//
-	////fmt.Printf("Mark %v\n", mark)
-	//if mark > -1 {
-	//	c.expires = c.expires[mark+1:]
-	//}
 }
 
 func (c *PriorityExpiryCache) deleteItemFromMap(toRm *entry) {
@@ -285,7 +257,9 @@ func (c *PriorityExpiryCache) deleteItemFromMap(toRm *entry) {
 				if len(entryList) == 1 {
 					delete(c.priorities, toRm.key)
 				} else {
+					fmt.Printf("BEFORE %v\n", entryList)
 					c.priorities[toRm.key] = append(entryList[0:i], entryList[i+1:]...)
+					fmt.Printf("AFTER %v\n", c.priorities[toRm.key])
 				}
 				break
 			}

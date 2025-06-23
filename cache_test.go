@@ -25,9 +25,11 @@ func TestBasicExpire(t *testing.T) {
 	c.Set("E", 1, 1, 1)
 	keys = c.Keys()
 	fmt.Printf("%v\n", keys)
-	assert.Equal(t, 1, len(keys))
-	assert.Equal(t, "E", keys[0])
+	assert.Equal(t, 3, len(keys))
 
+	v, ok := c.Get("E")
+	assert.True(t, ok)
+	assert.Equal(t, 1, v)
 }
 
 func TestClear(t *testing.T) {
@@ -117,7 +119,7 @@ func TestEmptyExpire(t *testing.T) {
 
 }
 
-func xestGetExpired(t *testing.T) {
+func TestGetExpired(t *testing.T) {
 	c := NewCache(3, &WallTime{})
 	c.Set("A", 1, 1, 1)
 	c.Set("B", 1, 1, 1)
