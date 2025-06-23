@@ -94,6 +94,7 @@ func (el *ChunkedExpiryList) Get(i int) *entry {
 	return eb.get(i % el.blockSize)
 }
 
+// Delete removes the low watermark entry
 func (el *ChunkedExpiryList) Delete() *entry {
 	eb := el.entries[0]
 	toRm := eb.delete()
@@ -102,6 +103,7 @@ func (el *ChunkedExpiryList) Delete() *entry {
 			el.entries = el.entries[1:]
 			el.endBlock--
 		} else {
+			// Do not remove the block, just reset it.
 			el.entries[0] = el.MakeEntryBlock()
 		}
 	}

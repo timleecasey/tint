@@ -17,6 +17,12 @@ func (pq *ExpirePQ) Len() int {
 }
 
 func (pq *ExpirePQ) Swap(i, j int) {
+	if i == -1 {
+		return
+	}
+	if j == -1 {
+		return
+	}
 	pq.entries[i], pq.entries[j] = pq.entries[j], pq.entries[i]
 }
 
@@ -36,7 +42,7 @@ func (pq *ExpirePQ) Pop() any {
 }
 
 func (pq *ExpirePQ) Less(i, j int) bool {
-	less := pq.entries[j].expireTime < pq.entries[i].expireTime
+	less := pq.entries[i].expireTime < pq.entries[j].expireTime
 	return less
 }
 
