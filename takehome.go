@@ -163,15 +163,16 @@ func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInS
 		created:    time.Now().UnixMilli(), // fights with timer
 	}
 
-	if c.itemCount >= c.maxItems {
-		c.evictItems()
-	}
-
 	//
 	// Allow for duplication in the cache.  When there
 	// is an eviction notice this should resolve then.
 	//
 	c.itemCount++
+
+	if c.itemCount >= c.maxItems {
+		c.evictItems()
+	}
+
 	heap.Push(c.expiryPq, i) // have to push from a heap
 
 	ofKey, ok := c.priorities[key]
@@ -207,7 +208,7 @@ func (c *PriorityExpiryCache) evictItems() {
 
 	c.evictExpired(c.timer.NowInMillis())
 
-	if c.itemCount <= c.maxItems {
+	if c.itemCount < c.maxItems {
 		return
 	}
 
@@ -258,8 +259,8 @@ func (c *PriorityExpiryCache) evictPriorities() {
 // Go through and remove items which are past now
 func (c *PriorityExpiryCache) evictExpired(now int64) {
 
-	var pq *ExpirePQ
-	pq = c.expiryPq.(*ExpirePQ)
+	var pq *EntryPQ
+	pq = c.expiryPq.(*EntryPQ)
 	e := pq.Peek()
 	for e != nil && e.expireTime <= now {
 

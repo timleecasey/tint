@@ -148,3 +148,20 @@ func TestGetExpired(t *testing.T) {
 	assert.False(t, ok)
 	assert.Equal(t, int(NO_KEY), val)
 }
+
+func TestPriorityOverflow(t *testing.T) {
+	c := NewCache(3, &WallTime{})
+
+	c.Set("A", 1, 1, 100)
+	c.Set("B", 1, 2, 100)
+	c.Set("C", 1, 3, 100)
+	c.Set("D", 1, 4, 100)
+	c.Set("E", 1, 5, 100)
+	c.Set("F", 1, 6, 100)
+
+	keys := c.Keys()
+	assert.Equal(t, 3, len(keys))
+	assert.Equal(t, "D", keys[0])
+}
+
+

@@ -4,27 +4,47 @@ import (
 	"fmt"
 )
 
-type ExpirePQ struct {
+const (
+	//
+	// LoadFactor
+	// Is the factor used to cover overages between eviction by priority
+	// and eviction by expiry.  This is set to cover unit testing.
+	//
+	LoadFactor = 2
+)
+
+type EntryPQ struct {
 	entries  []*entry
 	capacity int
+	priority bool
+	expiry   bool
 }
 
-func (pq *ExpirePQ) String() string {
+func (pq *EntryPQ) String() string {
 	return fmt.Sprintf("%v %v", pq.capacity, pq.entries)
 }
 
-func MakeExpirePQ(max int) *ExpirePQ {
-	return &ExpirePQ{
-		entries:  make([]*entry, max),
+func MakeExpirePQ(max int) *EntryPQ {
+	return &EntryPQ{
+		entries:  make([]*entry, max*LoadFactor),
 		capacity: 0,
+		expiry:   true,
 	}
 }
 
-func (pq *ExpirePQ) Len() int {
+func MakePriorityPQ(max int) *EntryPQ {
+	return &EntryPQ{
+		entries:  make([]*entry, max),
+		capacity: 0,
+		priority: true,
+	}
+}
+
+func (pq *EntryPQ) Len() int {
 	return pq.capacity
 }
 
-func (pq *ExpirePQ) Swap(i, j int) {
+func (pq *EntryPQ) Swap(i, j int) {
 	if i == -1 {
 		return
 	}
@@ -34,12 +54,12 @@ func (pq *ExpirePQ) Swap(i, j int) {
 	pq.entries[i], pq.entries[j] = pq.entries[j], pq.entries[i]
 }
 
-func (pq *ExpirePQ) Push(a any) {
+func (pq *EntryPQ) Push(a any) {
 	pq.entries[pq.capacity] = a.(*entry)
 	pq.capacity++
 }
 
-func (pq *ExpirePQ) Pop() any {
+func (pq *EntryPQ) Pop() any {
 	if pq.capacity <= 0 {
 		return nil
 	}
@@ -49,12 +69,19 @@ func (pq *ExpirePQ) Pop() any {
 	return e
 }
 
-func (pq *ExpirePQ) Less(i, j int) bool {
-	less := pq.entries[i].expireTime < pq.entries[j].expireTime
-	return less
+func (pq *EntryPQ) Less(i, j int) bool {
+	if pq.expiry {
+		// earliest at index 0
+		less := pq.entries[i].expireTime < pq.entries[j].expireTime
+		return less
+	} else {
+		// least priority at index 0
+		less := int(pq.entries[i].priority) < int(pq.entries[j].priority)
+		return less
+	}
 }
 
-func (pq *ExpirePQ) Peek() *entry {
+func (pq *EntryPQ) Peek() *entry {
 	if pq.capacity == 0 {
 		return nil
 	}

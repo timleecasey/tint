@@ -9,7 +9,7 @@ import (
 func TestBasicStacked(t *testing.T) {
 
 	sl := MakeExpiryList(3)
-	e := makeEntryAt(1, 1)
+	e := makeExpEntryAt(1, 1)
 	sl.Append(e)
 	sl.Append(e)
 	sl.Append(e)
@@ -51,16 +51,16 @@ func TestExpire(t *testing.T) {
 	sl := MakeExpiryList(3)
 	var e *entry
 
-	e = makeEntryAt(2, 1)
+	e = makeExpEntryAt(2, 1)
 	sl.Append(e)
 
-	e = makeEntryAt(2, 2)
+	e = makeExpEntryAt(2, 2)
 	sl.Append(e)
 
-	e = makeEntryAt(2, 3)
+	e = makeExpEntryAt(2, 3)
 	sl.Append(e)
 
-	e = makeEntryAt(1, 4)
+	e = makeExpEntryAt(1, 4)
 	sl.Append(e)
 
 	e = sl.Delete()
@@ -77,12 +77,23 @@ func TestExpire(t *testing.T) {
 
 }
 
-func makeEntryAt(expire int64, n int) *entry {
+func makeExpEntryAt(expire int64, n int) *entry {
 	e := &entry{
 		expireTime: expire,
 		op:         uint64(n),
 		key:        fmt.Sprintf("k%v", n),
 		priority:   Priority(n),
+		value:      Value(n),
+	}
+	return e
+}
+
+func makePriEntry(priority int, n int) *entry {
+	e := &entry{
+		expireTime: 100,
+		op:         uint64(n),
+		key:        fmt.Sprintf("k%v", n),
+		priority:   Priority(priority),
 		value:      Value(n),
 	}
 	return e
