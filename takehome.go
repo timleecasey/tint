@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"container/heap"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"time"
@@ -42,12 +43,15 @@ const (
 	LEAST_PRIORITY    = Priority(0)
 )
 
+var debug = false
+
 type entry struct {
-	expireTime int64
-	op         uint64
-	key        string
-	priority   Priority
-	value      Value
+	expireTime int64    // expireTime is the time when the item after which an entry is considered expired
+	op         uint64   // op is the nth operation used for LRU
+	key        string   // key is used to go from expiry list to map eviction
+	priority   Priority // priority of the entry
+	value      Value    // the value of the entry
+	created    int64    // purely for debugging, mark the created time so the millis become easier to read
 }
 
 func LowToHighExpire(a, b *entry) int {
@@ -77,7 +81,7 @@ func HiToLowPriority(a, b *entry) int {
 }
 
 func (e *entry) String() string {
-	return fmt.Sprintf("%v:%v @ %v", e.key, e.op, e.expireTime/1000)
+	return fmt.Sprintf("(%v:%v:%v @ E:%v P:%v)", e.key, e.op, e.value, (e.expireTime-e.created)/1000, e.priority)
 }
 
 type PriorityExpiryCache struct {
@@ -86,7 +90,7 @@ type PriorityExpiryCache struct {
 	curOp      uint64              // curOp will identify the order of entries and usage.
 	expiryPq   heap.Interface      // expiryPq is a heap interface keeping the next expiry backed by an array
 	priorities map[string][]*entry // priorities is a map of entires which are kept by priority
-	timer      TimeProvider
+	timer      TimeProvider        // timer allows for a differentiable time provider, either wall clock or something less time consuming
 }
 
 func NewCache(capacity int, timer TimeProvider) *PriorityExpiryCache {
@@ -156,6 +160,7 @@ func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInS
 		value:      Value(value),
 		op:         c.curOp,
 		key:        strings.Trim(key, " \n\r\t"),
+		created:    time.Now().UnixMilli(), // fights with timer
 	}
 
 	if c.itemCount >= c.maxItems {
@@ -212,12 +217,10 @@ func (c *PriorityExpiryCache) evictItems() {
 	}
 }
 
-//
 // evictPriorities
 // Go through the items by priority and find a item to evict.
 // Since we add/remove items one by one, this primarily operates
 // by finding a low priority item and removing it.
-//
 func (c *PriorityExpiryCache) evictPriorities() {
 
 	var cur *entry
@@ -253,15 +256,20 @@ func (c *PriorityExpiryCache) evictPriorities() {
 
 // evictExpired
 // Go through and remove items which are past now
-//
 func (c *PriorityExpiryCache) evictExpired(now int64) {
 
 	var pq *ExpirePQ
 	pq = c.expiryPq.(*ExpirePQ)
 	e := pq.Peek()
 	for e != nil && e.expireTime <= now {
-		heap.Pop(c.expiryPq)
+
+		if debug {
+			log.Printf("DEL EXP: %v\n", e)
+		}
+
+		e = heap.Pop(c.expiryPq).(*entry) // make sure and remove the same thing.
 		c.deleteItemFromMap(e)
+
 		e = pq.Peek()
 	}
 
@@ -281,12 +289,15 @@ func (c *PriorityExpiryCache) deleteItemFromMap(toRm *entry) {
 			e := entryList[i]
 			if e.priority == toRm.priority && e.expireTime == toRm.expireTime {
 				c.itemCount--
+
+				if debug {
+					log.Printf("DEL PRI %v\n", e)
+				}
+
 				if len(entryList) == 1 {
 					delete(c.priorities, toRm.key)
 				} else {
-					fmt.Printf("BEFORE %v\n", entryList)
 					c.priorities[toRm.key] = append(entryList[0:i], entryList[i+1:]...)
-					fmt.Printf("AFTER %v\n", c.priorities[toRm.key])
 				}
 				break
 			}

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
+	"log"
 	"testing"
 )
 
@@ -11,9 +12,9 @@ func TestBasicExpire(t *testing.T) {
 	c := NewCache(4, &WallTime{})
 
 	c.Set("A", 1, 1, 1)
-	c.Set("B", 1, 1, 2)
-	c.Set("C", 1, 1, 3)
-	c.Set("D", 1, 1, 4)
+	c.Set("B", 2, 1, 2)
+	c.Set("C", 3, 1, 3)
+	c.Set("D", 4, 1, 4)
 
 	var keys []string
 
@@ -25,7 +26,7 @@ func TestBasicExpire(t *testing.T) {
 	c.Set("E", 1, 1, 1)
 	keys = c.Keys()
 	fmt.Printf("%v\n", keys)
-	assert.Equal(t, 3, len(keys))
+	assert.Equal(t, 1, len(keys))
 
 	v, ok := c.Get("E")
 	assert.True(t, ok)
@@ -69,10 +70,16 @@ func TestLRU(t *testing.T) {
 }
 
 func TestShadow(t *testing.T) {
-	c := NewCache(3, &WallTime{})
-	c.Set("A", 1, 1, 100)
-	c.Set("A", 2, 2, 10)
+	log.Printf("START SHADOW\n")
+	c := NewCache(10, &WallTime{})
+	c.Set("A", 1, 10, 100)
+	c.Set("A", 2, 20, 10)
 	c.Set("A", 3, 99, 1)
+	//c.Set("B", 3, 99, 50)
+	//c.Set("C", 3, 99, 50)
+	//c.Set("D", 3, 99, 50)
+	//c.Set("E", 3, 99, 50)
+	//c.Set("F", 3, 99, 50)
 	var keys []string
 	var ok bool
 	var val int
@@ -86,15 +93,19 @@ func TestShadow(t *testing.T) {
 	assert.Equal(t, 3, val)
 
 	sleep(2)
+	log.Printf("AT 2s\n")
 	val, ok = c.Get("A")
 	assert.True(t, ok)
 	assert.Equal(t, 2, val)
 
 	sleep(10)
+	log.Printf("AT 12s\n")
+
 	val, ok = c.Get("A")
 	assert.True(t, ok)
 	assert.Equal(t, 1, val)
 
+	log.Printf("DONE")
 }
 
 func TestEmptyExpire(t *testing.T) {

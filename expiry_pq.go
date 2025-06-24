@@ -1,8 +1,16 @@
 package main
 
+import (
+	"fmt"
+)
+
 type ExpirePQ struct {
 	entries  []*entry
 	capacity int
+}
+
+func (pq *ExpirePQ) String() string {
+	return fmt.Sprintf("%v %v", pq.capacity, pq.entries)
 }
 
 func MakeExpirePQ(max int) *ExpirePQ {
@@ -50,5 +58,5 @@ func (pq *ExpirePQ) Peek() *entry {
 	if pq.capacity == 0 {
 		return nil
 	}
-	return pq.entries[pq.capacity-1]
+	return pq.entries[0]
 }
