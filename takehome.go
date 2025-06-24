@@ -88,19 +88,24 @@ type PriorityExpiryCache struct {
 	maxItems   int                 // maxItems is the maximum entries allowed in the cache
 	itemCount  int                 // itemCount is the number of current entries in the cache
 	curOp      uint64              // curOp will identify the order of entries and usage.
-	expiryPq   heap.Interface      // expiryPq is a heap interface keeping the next expiry backed by an array
+	expiryPq   heap.Interface      // expiryPq is a heap to keep track of the entries by expiry time
+	priorityPq heap.Interface      // priorityPq is a heap to keep track of the entries by priority
 	priorities map[string][]*entry // priorities is a map of entires which are kept by priority
 	timer      TimeProvider        // timer allows for a differentiable time provider, either wall clock or something less time consuming
 }
 
 func NewCache(capacity int, timer TimeProvider) *PriorityExpiryCache {
-	var h heap.Interface
-	h = MakeExpirePQ(capacity)
-	heap.Init(h)
+	expiry := MakeExpirePQ(capacity)
+	heap.Init(expiry)
+
+	priority := MakePriorityPQ(capacity)
+	heap.Init(priority)
+
 	return &PriorityExpiryCache{
 		maxItems:   capacity,
 		curOp:      0,
-		expiryPq:   h,
+		expiryPq:   expiry,
+		priorityPq: priority,
 		priorities: make(map[string][]*entry, 0),
 		timer:      timer,
 	}
@@ -169,11 +174,12 @@ func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInS
 	//
 	c.itemCount++
 
-	if c.itemCount >= c.maxItems {
+	if c.itemCount > c.maxItems {
 		c.evictItems()
 	}
 
-	heap.Push(c.expiryPq, i) // have to push from a heap
+	heap.Push(c.expiryPq, i)
+	heap.Push(c.priorityPq, i)
 
 	ofKey, ok := c.priorities[key]
 	if !ok {
@@ -182,7 +188,9 @@ func (c *PriorityExpiryCache) Set(key string, value int, priority int, expireInS
 		c.priorities[key] = ofKey
 	} else {
 		//
-		// This seems overkill, or a waste of churn.
+		// This is a hope springs eternal.
+		// During Get() is better to get priorities[key][0]
+		// than to do a scan over an array.
 		//
 		c.priorities[key] = append(ofKey, i)
 		slices.SortFunc(c.priorities[key], HiToLowPriority)
@@ -224,34 +232,19 @@ func (c *PriorityExpiryCache) evictItems() {
 // by finding a low priority item and removing it.
 func (c *PriorityExpiryCache) evictPriorities() {
 
-	var cur *entry
-	cur = nil
-	lowestPri := INITIAL_PRIORITY
-	lowestOp := c.curOp
+	var pq *EntryPQ
+	pq = c.priorityPq.(*EntryPQ)
+	e := pq.Peek()
+	for e != nil && c.itemCount > c.maxItems {
 
-	for _, v := range c.priorities {
-
-		if len(v) > 0 {
-			//
-			// Select the lowest priority entry from a given key
-			//
-			e := v[len(v)-1]
-			if e.priority < lowestPri {
-				cur = e
-				lowestPri = e.priority
-				lowestOp = e.op
-				//
-				// Take the LRU if the priorities are the same.
-				//
-			} else if e.priority == lowestPri && e.op < lowestOp {
-				cur = e
-				lowestOp = e.op
-			}
+		if debug {
+			log.Printf("DEL PRI: %v\n", e)
 		}
-	}
 
-	if cur != nil {
-		c.deleteItemFromMap(cur)
+		e = heap.Pop(c.priorityPq).(*entry) // make sure and remove the same thing.
+		c.deleteItemFromMap(e)
+
+		e = pq.Peek()
 	}
 }
 

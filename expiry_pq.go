@@ -34,7 +34,7 @@ func MakeExpirePQ(max int) *EntryPQ {
 
 func MakePriorityPQ(max int) *EntryPQ {
 	return &EntryPQ{
-		entries:  make([]*entry, max),
+		entries:  make([]*entry, max*LoadFactor),
 		capacity: 0,
 		priority: true,
 	}
